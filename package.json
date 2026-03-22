@@ -1,14 +1,13 @@
 {
-  "name": "spaargids",
+  "name": "spaargids-backend",
   "version": "1.0.0",
-
+  "main": "server.js",
   "scripts": {
     "start": "node server.js",
     "postinstall": "npx playwright install chromium"
   },
-
   "dependencies": {
-    "express": "...",
-    "playwright": "..."
+    "express": "^4.22.1",
+    "playwright": "^1.41.2"
   }
 }
