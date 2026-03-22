@@ -10,7 +10,7 @@ const URL =
 // ---------- HELPERS ----------
 
 function normalizeNumber(value) {
-  if (!value) return null;
+  if (value === null || value === undefined || value === '') return null;
 
   const cleaned = String(value)
     .replace(/[^\d,.-]/g, '')
@@ -43,52 +43,43 @@ function mapFormula(f) {
   return f;
 }
 
-function cleanMoney(text) {
-  return String(text || '')
-    .replace(/\s+/g, ' ')
-    .trim()
-    .replace('€', '')
-    .trim();
-}
-
 async function fill(page, selector, value, label) {
   const el = page.locator(selector).first();
-
   await el.waitFor({ state: 'visible', timeout: 10000 });
   await el.fill('');
   await el.type(String(value), { delay: 20 });
-
   console.log(`✅ ${label}:`, await el.inputValue());
 }
 
 async function extractTableResults(page) {
-  const headers = await page.locator('table thead th').allTextContents().catch(() => []);
-  console.log('🧾 HEADERS:', headers.map(h => h.trim()).filter(Boolean));
+  await page.waitForSelector('#results', { timeout: 15000 });
+  await page.waitForTimeout(5000);
 
-  const rows = await page.locator('table tbody tr').all();
+  const rows = await page.locator('#results table tbody tr:visible').all();
+  console.log('Aantal rows gevonden:', rows.length);
 
   if (!rows.length) {
-    throw new Error('Geen resultaatrijen gevonden in tabel');
+    throw new Error('Geen resultaten in #results tabel');
   }
 
   const firstRow = rows[0];
   const cells = await firstRow.locator('td').all();
 
-  if (cells.length < 4) {
-    throw new Error(`Te weinig kolommen gevonden: ${cells.length}`);
-  }
-
-  const cellTexts = [];
+  const values = [];
   for (const cell of cells) {
-    cellTexts.push((await cell.innerText()).trim());
+    values.push((await cell.innerText()).trim());
   }
 
-  console.log('📋 CELL TEXTS:', cellTexts);
+  console.log('CELLS:', values);
+
+  if (values.length < 5) {
+    throw new Error(`Te weinig kolommen: ${values.length}`);
+  }
 
   return {
-    monthly: cleanMoney(cellTexts[1]),
-    interest: cleanMoney(cellTexts[2]),
-    total: cleanMoney(cellTexts[3])
+    monthly: values[2],
+    interest: values[3],
+    total: values[4]
   };
 }
 
@@ -104,23 +95,55 @@ app.get('/health', (_, res) => {
 
 app.post('/calculate-mortgage', async (req, res) => {
   console.log('🔥 START');
+  console.log('BODY:', req.body);
 
   const { formula, interestRate, amount, durationYears } = req.body;
 
   const f = mapFormula(formula);
   const rate = toDecimal(interestRate);
   const amt = toCurrency(amount);
-  const years = String(Math.round(normalizeNumber(durationYears)));
+  const yearsNum = normalizeNumber(durationYears);
+  const years = yearsNum !== null ? String(Math.round(yearsNum)) : null;
+
+  if (!f || !rate || !amt || !years) {
+    return res.status(400).json({
+      success: false,
+      error: 'Ongeldige input'
+    });
+  }
 
   let browser;
 
   try {
     browser = await chromium.launch({
       headless: true,
-      args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage', '--disable-gpu']
+      args: [
+        '--no-sandbox',
+        '--disable-setuid-sandbox',
+        '--disable-dev-shm-usage',
+        '--disable-gpu'
+      ]
     });
 
     const page = await browser.newPage();
+    page.setDefaultTimeout(15000);
+    page.setDefaultNavigationTimeout(30000);
+
+    page.on('console', msg => console.log('PAGE LOG:', msg.text()));
+    page.on('pageerror', err => console.log('PAGE ERROR:', err.message));
+    page.on('requestfailed', req => {
+      const url = req.url();
+      if (
+        url.includes('google-analytics') ||
+        url.includes('analytics.google.com') ||
+        url.includes('googletagmanager') ||
+        url.includes('yahoo.com') ||
+        url.includes('advertising-cdn')
+      ) {
+        return;
+      }
+      console.log('REQUEST FAILED:', url, req.failure()?.errorText);
+    });
 
     await page.goto(URL, { waitUntil: 'domcontentloaded' });
     await page.waitForTimeout(4000);
@@ -128,6 +151,7 @@ app.post('/calculate-mortgage', async (req, res) => {
     console.log('🌐 Loaded');
 
     await page.selectOption('#formule', { label: f });
+    console.log(`✅ formule: ${f}`);
 
     await fill(page, '#rate', rate, 'rente');
     await fill(page, '#amount', amt, 'bedrag');
@@ -155,10 +179,7 @@ app.post('/calculate-mortgage', async (req, res) => {
       console.log('🧮 Enter fallback');
     }
 
-    await page.waitForTimeout(4000);
-
     const result = await extractTableResults(page);
-
     console.log('📊 RESULT:', result);
 
     res.json({
@@ -166,11 +187,9 @@ app.post('/calculate-mortgage', async (req, res) => {
       inputs: { f, rate, amt, years },
       result
     });
-
   } catch (e) {
     console.log('❌ ERROR:', e.message);
     res.status(500).json({ error: e.message });
-
   } finally {
     if (browser) await browser.close();
   }
