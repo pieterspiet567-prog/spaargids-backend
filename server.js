@@ -43,18 +43,12 @@ function mapFormula(f) {
   return f;
 }
 
-function extract(text) {
-  const t = String(text).replace(/\s+/g, ' ');
-
-  const m = t.match(/€\s*([\d.]+,\d{2}).*?per maand/i);
-  const i = t.match(/€\s*([\d.]+,\d{2}).*?interest/i);
-  const tot = t.match(/€\s*([\d.]+,\d{2}).*?totaal/i);
-
-  return {
-    monthly: m?.[1] || null,
-    interest: i?.[1] || null,
-    total: tot?.[1] || null
-  };
+function cleanMoney(text) {
+  return String(text || '')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .replace('€', '')
+    .trim();
 }
 
 async function fill(page, selector, value, label) {
@@ -65,6 +59,37 @@ async function fill(page, selector, value, label) {
   await el.type(String(value), { delay: 20 });
 
   console.log(`✅ ${label}:`, await el.inputValue());
+}
+
+async function extractTableResults(page) {
+  const headers = await page.locator('table thead th').allTextContents().catch(() => []);
+  console.log('🧾 HEADERS:', headers.map(h => h.trim()).filter(Boolean));
+
+  const rows = await page.locator('table tbody tr').all();
+
+  if (!rows.length) {
+    throw new Error('Geen resultaatrijen gevonden in tabel');
+  }
+
+  const firstRow = rows[0];
+  const cells = await firstRow.locator('td').all();
+
+  if (cells.length < 4) {
+    throw new Error(`Te weinig kolommen gevonden: ${cells.length}`);
+  }
+
+  const cellTexts = [];
+  for (const cell of cells) {
+    cellTexts.push((await cell.innerText()).trim());
+  }
+
+  console.log('📋 CELL TEXTS:', cellTexts);
+
+  return {
+    monthly: cleanMoney(cellTexts[1]),
+    interest: cleanMoney(cellTexts[2]),
+    total: cleanMoney(cellTexts[3])
+  };
 }
 
 // ---------- ROUTES ----------
@@ -92,7 +117,7 @@ app.post('/calculate-mortgage', async (req, res) => {
   try {
     browser = await chromium.launch({
       headless: true,
-      args: ['--no-sandbox', '--disable-setuid-sandbox'] // 🔥 belangrijk voor Render
+      args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage', '--disable-gpu']
     });
 
     const page = await browser.newPage();
@@ -108,7 +133,6 @@ app.post('/calculate-mortgage', async (req, res) => {
     await fill(page, '#amount', amt, 'bedrag');
     await fill(page, '#year', years, 'looptijd');
 
-    // klik bereken
     const selectors = [
       'button:has-text("Bereken")',
       'input[type="submit"]'
@@ -133,8 +157,7 @@ app.post('/calculate-mortgage', async (req, res) => {
 
     await page.waitForTimeout(4000);
 
-    const text = await page.locator('body').textContent();
-    const result = extract(text);
+    const result = await extractTableResults(page);
 
     console.log('📊 RESULT:', result);
 
@@ -153,7 +176,7 @@ app.post('/calculate-mortgage', async (req, res) => {
   }
 });
 
-// ---------- START (RENDER READY) ----------
+// ---------- START ----------
 
 const PORT = process.env.PORT || 3000;
 
