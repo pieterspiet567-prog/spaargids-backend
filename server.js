@@ -52,14 +52,35 @@ async function fill(page, selector, value, label) {
 }
 
 async function extractTableResults(page) {
-  await page.waitForSelector('#results', { timeout: 15000 });
   await page.waitForTimeout(5000);
 
-  const rows = await page.locator('#results table tbody tr:visible').all();
+  const tables = page.locator('#results table');
+  const tableCount = await tables.count();
+  console.log('Aantal #results tables:', tableCount);
+
+  if (tableCount === 0) {
+    throw new Error('Geen tabellen gevonden binnen #results');
+  }
+
+  // Neem de laatste tabel, want de eerste #results container is leeg volgens de logs
+  const targetTable = tables.last();
+
+  await targetTable.waitFor({ state: 'visible', timeout: 15000 });
+
+  const headers = await targetTable
+    .locator('thead th')
+    .allTextContents()
+    .catch(() => []);
+  console.log(
+    'HEADERS:',
+    headers.map(h => h.trim()).filter(Boolean)
+  );
+
+  const rows = await targetTable.locator('tbody tr').all();
   console.log('Aantal rows gevonden:', rows.length);
 
   if (!rows.length) {
-    throw new Error('Geen resultaten in #results tabel');
+    throw new Error('Geen resultaatrijen gevonden in de gekozen tabel');
   }
 
   const firstRow = rows[0];
