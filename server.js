@@ -10,7 +10,7 @@ const URL =
 // ---------- HELPERS ----------
 
 function normalizeNumber(value) {
-  if (value === null || value === undefined || value === '') return null;
+  if (!value) return null;
 
   const cleaned = String(value)
     .replace(/[^\d,.-]/g, '')
@@ -51,56 +51,36 @@ async function fill(page, selector, value, label) {
   console.log(`✅ ${label}:`, await el.inputValue());
 }
 
+// ---------- CORE SCRAPING ----------
+
 async function extractTableResults(page) {
-  await page.waitForTimeout(5000);
+  await page.waitForTimeout(6000);
 
-  const tables = page.locator('#results table');
-  const tableCount = await tables.count();
-  console.log('Aantal #results tables:', tableCount);
+  const results = page.locator('#results');
+  const count = await results.count();
 
-  if (tableCount === 0) {
-    throw new Error('Geen tabellen gevonden binnen #results');
+  console.log('Aantal #results:', count);
+
+  if (count === 0) {
+    throw new Error('Geen results containers gevonden');
   }
 
-  // Neem de laatste tabel, want de eerste #results container is leeg volgens de logs
-  const targetTable = tables.last();
+  const target = results.last();
 
-  await targetTable.waitFor({ state: 'visible', timeout: 15000 });
+  const text = await target.innerText();
+  console.log('RESULT TEXT:', text.slice(0, 500));
 
-  const headers = await targetTable
-    .locator('thead th')
-    .allTextContents()
-    .catch(() => []);
-  console.log(
-    'HEADERS:',
-    headers.map(h => h.trim()).filter(Boolean)
-  );
+  const matches = [...text.matchAll(/(\d{1,3}(?:\.\d{3})*,\d{2})\s*€/g)];
+  console.log('MATCHES:', matches.map(m => m[1]));
 
-  const rows = await targetTable.locator('tbody tr').all();
-  console.log('Aantal rows gevonden:', rows.length);
-
-  if (!rows.length) {
-    throw new Error('Geen resultaatrijen gevonden in de gekozen tabel');
-  }
-
-  const firstRow = rows[0];
-  const cells = await firstRow.locator('td').all();
-
-  const values = [];
-  for (const cell of cells) {
-    values.push((await cell.innerText()).trim());
-  }
-
-  console.log('CELLS:', values);
-
-  if (values.length < 5) {
-    throw new Error(`Te weinig kolommen: ${values.length}`);
+  if (matches.length < 3) {
+    throw new Error('Niet genoeg bedragen gevonden');
   }
 
   return {
-    monthly: values[2],
-    interest: values[3],
-    total: values[4]
+    monthly: matches[0][1],
+    interest: matches[1][1],
+    total: matches[2][1]
   };
 }
 
@@ -148,23 +128,8 @@ app.post('/calculate-mortgage', async (req, res) => {
 
     const page = await browser.newPage();
     page.setDefaultTimeout(15000);
-    page.setDefaultNavigationTimeout(30000);
 
     page.on('console', msg => console.log('PAGE LOG:', msg.text()));
-    page.on('pageerror', err => console.log('PAGE ERROR:', err.message));
-    page.on('requestfailed', req => {
-      const url = req.url();
-      if (
-        url.includes('google-analytics') ||
-        url.includes('analytics.google.com') ||
-        url.includes('googletagmanager') ||
-        url.includes('yahoo.com') ||
-        url.includes('advertising-cdn')
-      ) {
-        return;
-      }
-      console.log('REQUEST FAILED:', url, req.failure()?.errorText);
-    });
 
     await page.goto(URL, { waitUntil: 'domcontentloaded' });
     await page.waitForTimeout(4000);
@@ -178,6 +143,7 @@ app.post('/calculate-mortgage', async (req, res) => {
     await fill(page, '#amount', amt, 'bedrag');
     await fill(page, '#year', years, 'looptijd');
 
+    // klik op bereken
     const selectors = [
       'button:has-text("Bereken")',
       'input[type="submit"]'
@@ -208,9 +174,11 @@ app.post('/calculate-mortgage', async (req, res) => {
       inputs: { f, rate, amt, years },
       result
     });
+
   } catch (e) {
     console.log('❌ ERROR:', e.message);
     res.status(500).json({ error: e.message });
+
   } finally {
     if (browser) await browser.close();
   }
