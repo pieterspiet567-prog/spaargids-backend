@@ -4,13 +4,12 @@ const { chromium } = require('playwright');
 const app = express();
 app.use(express.json());
 
-const URL =
-  'https://www.spaargids.be/sparen/simulatie-woonlening.html#results';
+const URL = 'https://www.spaargids.be/sparen/simulatie-woonlening.html#results';
 
 // ---------- HELPERS ----------
 
 function normalizeNumber(value) {
-  if (!value) return null;
+  if (value === undefined || value === null || value === '') return null;
 
   const cleaned = String(value)
     .replace(/[^\d,.-]/g, '')
@@ -39,58 +38,56 @@ function toCurrency(value) {
 
 function mapFormula(f) {
   const val = String(f || '').toLowerCase().trim();
+
   if (val.includes('vast')) return 'vaste rentevoet';
+  if (val.includes('variabel')) return 'variabele rentevoet';
+
   return f;
 }
 
 async function fill(page, selector, value, label) {
   const el = page.locator(selector).first();
   await el.waitFor({ state: 'visible', timeout: 10000 });
+  await el.click({ force: true });
   await el.fill('');
-  await el.type(String(value), { delay: 20 });
+  await el.type(String(value), { delay: 25 });
   console.log(`✅ ${label}:`, await el.inputValue());
+}
+
+function extractCurrency(text) {
+  if (!text) return null;
+  const match = text.match(/€\s*([\d.]+,\d{2})|([\d.]+,\d{2})\s*€/);
+  return match ? (match[1] || match[2]) : null;
 }
 
 // ---------- CORE SCRAPING ----------
 
-async function extractTableResults(page) {
-  await page.waitForTimeout(6000);
+async function extractMonthlyResult(page) {
+  // Wacht tot het simulatieblok zichtbaar is
+  const simulationHeading = page.getByText('2. Uw simulatie', { exact: true });
+  await simulationHeading.waitFor({ state: 'visible', timeout: 15000 });
 
-  const results = page.locator('#results');
-  const count = await results.count();
+  // Neem enkel de container van "Uw simulatie", niet de aflossingstabel eronder
+  const simulationBox = simulationHeading.locator('xpath=following-sibling::*[1]');
+  await simulationBox.waitFor({ state: 'visible', timeout: 15000 });
 
-  console.log('Aantal #results:', count);
+  // Wacht tot er effectief "per maand" in staat
+  await simulationBox.getByText('per maand', { exact: true }).waitFor({
+    state: 'visible',
+    timeout: 15000
+  });
 
-  if (count === 0) {
-    throw new Error('Geen results containers gevonden');
+  const text = await simulationBox.innerText();
+  console.log('SIMULATION BOX TEXT:\n', text);
+
+  // Zoek specifiek het bedrag dat vlak voor "per maand" staat
+  const monthlyMatch = text.match(/€\s*([\d.]+,\d{2})\s*[\r\n\s]*per maand/i);
+
+  if (!monthlyMatch) {
+    throw new Error('Maandbedrag niet gevonden in simulatieblok');
   }
 
-  const target = results.last();
-
-  const text = await target.innerText();
-  console.log('RESULT TEXT:', text.slice(0, 1500));
-
-  const regex = /€\s*(\d{1,3}(?:\.\d{3})*,\d{2})|(\d{1,3}(?:\.\d{3})*,\d{2})\s*€/g;
-  const rawMatches = [...text.matchAll(regex)];
-
-  const amounts = rawMatches
-    .map(m => m[1] || m[2])
-    .filter(Boolean);
-
-  console.log('MATCHES:', amounts);
-
-  const uniqueAmounts = [...new Set(amounts)];
-  console.log('UNIQUE MATCHES:', uniqueAmounts);
-
-  if (uniqueAmounts.length < 3) {
-    throw new Error('Niet genoeg bedragen gevonden');
-  }
-
-  return {
-    monthly: uniqueAmounts[0],
-    interest: uniqueAmounts[1],
-    total: uniqueAmounts[2]
-  };
+  return monthlyMatch[1];
 }
 
 // ---------- ROUTES ----------
@@ -141,52 +138,46 @@ app.post('/calculate-mortgage', async (req, res) => {
     page.on('console', msg => console.log('PAGE LOG:', msg.text()));
 
     await page.goto(URL, { waitUntil: 'domcontentloaded' });
-    await page.waitForTimeout(4000);
+    await page.waitForLoadState('networkidle');
+    await page.waitForTimeout(2000);
 
     console.log('🌐 Loaded');
 
+    // Formule selecteren
     await page.selectOption('#formule', { label: f });
     console.log(`✅ formule: ${f}`);
 
+    // Velden invullen
     await fill(page, '#rate', rate, 'rente');
     await fill(page, '#amount', amt, 'bedrag');
     await fill(page, '#year', years, 'looptijd');
 
-    const selectors = [
-      'button:has-text("Bereken")',
-      'input[type="submit"]'
-    ];
+    // Klik op Bereken
+    const calculateButton = page.getByRole('button', { name: /bereken/i }).first();
 
-    let clicked = false;
-
-    for (const s of selectors) {
-      const el = page.locator(s).first();
-      if (await el.count()) {
-        await el.click({ force: true });
-        console.log('🧮 Klik via', s);
-        clicked = true;
-        break;
-      }
-    }
-
-    if (!clicked) {
+    if (await calculateButton.count()) {
+      await calculateButton.click({ force: true });
+      console.log('🧮 Klik op Bereken');
+    } else {
       await page.locator('#year').press('Enter');
       console.log('🧮 Enter fallback');
     }
 
-    const result = await extractTableResults(page);
-    console.log('📊 RESULT:', result);
+    // Enkel "per maand" terughalen
+    const monthly = await extractMonthlyResult(page);
+    console.log('📊 MONTHLY:', monthly);
 
     res.json({
       success: true,
-      inputs: { f, rate, amt, years },
-      result
+      inputs: { formula: f, rate, amount: amt, durationYears: years },
+      monthly
     });
-
   } catch (e) {
     console.log('❌ ERROR:', e.message);
-    res.status(500).json({ error: e.message });
-
+    res.status(500).json({
+      success: false,
+      error: e.message
+    });
   } finally {
     if (browser) await browser.close();
   }
