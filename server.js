@@ -68,19 +68,28 @@ async function extractTableResults(page) {
   const target = results.last();
 
   const text = await target.innerText();
-  console.log('RESULT TEXT:', text.slice(0, 500));
+  console.log('RESULT TEXT:', text.slice(0, 1500));
 
-  const matches = [...text.matchAll(/(\d{1,3}(?:\.\d{3})*,\d{2})\s*€/g)];
-  console.log('MATCHES:', matches.map(m => m[1]));
+  const regex = /€\s*(\d{1,3}(?:\.\d{3})*,\d{2})|(\d{1,3}(?:\.\d{3})*,\d{2})\s*€/g;
+  const rawMatches = [...text.matchAll(regex)];
 
-  if (matches.length < 3) {
+  const amounts = rawMatches
+    .map(m => m[1] || m[2])
+    .filter(Boolean);
+
+  console.log('MATCHES:', amounts);
+
+  const uniqueAmounts = [...new Set(amounts)];
+  console.log('UNIQUE MATCHES:', uniqueAmounts);
+
+  if (uniqueAmounts.length < 3) {
     throw new Error('Niet genoeg bedragen gevonden');
   }
 
   return {
-    monthly: matches[0][1],
-    interest: matches[1][1],
-    total: matches[2][1]
+    monthly: uniqueAmounts[0],
+    interest: uniqueAmounts[1],
+    total: uniqueAmounts[2]
   };
 }
 
@@ -143,7 +152,6 @@ app.post('/calculate-mortgage', async (req, res) => {
     await fill(page, '#amount', amt, 'bedrag');
     await fill(page, '#year', years, 'looptijd');
 
-    // klik op bereken
     const selectors = [
       'button:has-text("Bereken")',
       'input[type="submit"]'
