@@ -274,7 +274,7 @@ app.post('/calculate', async (req, res) => {
     if (!frame) throw new Error('Calculator iframe niet gevonden');
 
     // 5. Wacht tot frame geladen is
-  await frame.waitForSelector('input[type="radio"]', { timeout: 8000, state: 'attached' });
+   await frame.waitForSelector('text=Aankoopbedrag', { timeout: 8000 });
     console.log('Frame geladen');
 
     // 6. Select region
