@@ -317,7 +317,7 @@ app.post('/calculate', async (req, res) => {
 
     // 13. Wacht op resultaat
     console.log('Wacht op resultaat...');
-    await frame.waitForSelector('text=Het totaal van de kosten', { timeout: 12000 });
+	await page.waitForTimeout(5000);
 
     // 14. Read result
     const frameText = await frame.locator('body').textContent();
