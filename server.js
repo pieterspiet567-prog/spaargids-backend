@@ -144,8 +144,8 @@ async function fillInputNearLabel(frame, labelCandidates, value) {
     const xpath = `xpath=//*[contains(normalize-space(text()),"${label}")]/following::input[1]`;
     const locator = frame.locator(xpath).first();
     try {
-      const visible = await locator.isVisible({ timeout: 1500 }).catch(() => false);
-      if (visible) {
+       			const attached = await locator.count().catch(() => 0) > 0;
+			if (attached) {
         await locator.fill('');
         await locator.type(stringValue, { delay: 30 });
         await frame.waitForTimeout(200);
